@@ -1,205 +1,135 @@
-import os
-import matplotlib.pyplot as plt
-
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+import seaborn as sns
+import pandas as pd
+from matplotlib import pyplot as plt
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 
-from sdmetrics.single_table import DiscreteKLDivergence, ContinuousKLDivergence, KSComplement, CSTest, SVCDetection, TVComplement, LogisticDetection
-
-
-from anonymeter.evaluators import SinglingOutEvaluator, InferenceEvaluator
-
-
-def _split_data(df_train, df_test, nominal_features, target):
-    """
-    Split the data into features and target for both training and testing datasets.
-
-    Args:
-        df_train (DataFrame): Training dataset.
-        df_test (DataFrame): Testing dataset.
-        nominal_features (list): List of nominal features.
-        target (str): Target column name.
-
-    Returns:
-        tuple: A tuple containing X_train, y_train, X_test, and y_test.
-    """
-    def split_into_X_y(column_transformer, data):
-        X, y = data.drop(target, axis=1), data[target]
-        X_transformed = column_transformer.transform(X)
-
-        return (X_transformed, y)
-
-    column_transformer = ColumnTransformer(
-        transformers=[('cat', OneHotEncoder(handle_unknown='ignore'), nominal_features)]
+def create_model(clf, categorical_features):
+    categorical_features_onehot_transformer = ColumnTransformer(
+        transformers=[
+            (
+                "one-hot-encoder",
+                OneHotEncoder(handle_unknown="ignore"),
+                categorical_features,
+            ),
+        ],
+        remainder="passthrough",
     )
 
-    column_transformer.fit(df_train)
+    model = Pipeline(
+        [
+            ("one-hot-encoder", categorical_features_onehot_transformer),
+            ("clf", clf),
+        ]
+    )
+    return model
 
-    X_train, y_train = split_into_X_y(column_transformer, df_train)
-    X_test, y_test = split_into_X_y(column_transformer, df_test)
+
+def split_data(data, target, drop_na=False):
+    _df = data.copy()
+    if drop_na:
+        _df = _df.dropna()
+
+    X = _df.drop(columns=[target])
+    y = _df[target]
+
+    return X, y
+
+
+def train_and_evaluate(
+    model, train_data, test_data, target, drop_na=False, sample_weight=None
+):
+    X_train, y_train = split_data(train_data, target, drop_na)
+    X_test, y_test = split_data(test_data, target, drop_na)
+
+    if sample_weight is not None:
+        model.fit(X_train, y_train, clf__sample_weight=sample_weight)
+    else:
+        model.fit(X_train, y_train)
+
+    y_pred = model.predict(X_test)
+
+    return y_test, y_pred
+
+
+def describe_model(y_test, y_pred, verbose=False):
+    metrics = {
+        "Accuracy": accuracy_score(y_test, y_pred),
+        "Precision": precision_score(y_test, y_pred, average="macro"),
+        "Recall": recall_score(y_test, y_pred, average="macro"),
+        "F1": f1_score(y_test, y_pred, average="macro"),
+    }
+
+    if verbose:
+        print(f"Metric{' ':8} Value{' ':15}")
+        for k, v in metrics.items():
+            print(f"{k:15}{v:15}")
+
+    return metrics
+
+
+def plot_metrics(data, xlabel, ylabel, title):
+    data.plot(kind="line")
+
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    plt.title(title)
+    plt.legend(title="Metrics", bbox_to_anchor=(1.05, 1), loc="upper left")
+    plt.grid(True)
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+
+def prepare_data_fair_learning(df_train, df_test, nominal_features, target):
+    def custom_one_hot_encoding(X_train, X_test, nominal_features):
+        X_train = pd.get_dummies(X_train, columns=nominal_features)
+        X_test = pd.get_dummies(X_test, columns=nominal_features)
+
+        X_train, X_test = X_train.align(X_test, join='outer', axis=1, fill_value=0)
+
+        X_train.index = X_train.index
+        X_test.index = X_test.index
+        X_train[X_train.columns] = X_train[X_train.columns].astype(int)
+        X_test[X_test.columns] = X_test[X_test.columns].astype(int)
+        return X_train, X_test
+
+    _df_train = df_train.copy()
+    _df_test = df_test.copy()
+    X_train, y_train = split_data(_df_train, target, drop_na=True)
+    X_test, y_test = split_data(_df_test, target, drop_na=True)
+
+    if isinstance(_df_train.index, pd.MultiIndex):
+        X_train.index = y_train.index = pd.MultiIndex.from_arrays(X_train.index.codes, names=X_train.index.names)
+        X_test.index = y_test.index = pd.MultiIndex.from_arrays(X_test.index.codes, names=X_test.index.names)
+    y_train = pd.Series(y_train.factorize(sort=True)[0], index=y_train.index, name=y_train.name)
+    y_test = pd.Series(y_test.factorize(sort=True)[0], index=y_test.index, name=y_test.name)
+    
+    X_train, X_test = custom_one_hot_encoding(X_train, X_test, nominal_features)
 
     return X_train, y_train, X_test, y_test
 
 
-def train_and_evaluate(clf, df_train, df_test, nominal_features, target):
-    """
-    Train a classifier and evaluate its performance on the testing dataset.
+def plot_fairlearning_results(results):
+    _, axes = plt.subplots(1, 3, squeeze=True, figsize=(24, 6))
+    by_fair = results.set_index("param_fairness_weight")
 
-    Args:
-        clf (object): Classifier object.
-        df_train (DataFrame): Training dataset.
-        df_test (DataFrame): Testing dataset.
-        nominal_features (list): List of nominal features.
-        target (str): Target column name.
+    for ax, r in zip(axes, by_fair.index.unique()):
+        pivot_table = by_fair.xs(r).pivot(
+            index="param_reconstruct_weight",
+            columns="param_target_weight",
+            values="mean_test_score",
+        )
+        sns.heatmap(
+            pivot_table,
+            annot=True,
+            fmt=".1%",
+            vmin=results["mean_test_score"].min(),
+            vmax=results["mean_test_score"].max(),
+            square=True,
+            cbar=False,
+            ax=ax,
+        )
+        ax.set_title("param_fairness_weight={}".format(r))
 
-    Returns:
-        dict: Dictionary containing accuracy, precision, recall, and F1-score.
-    """
-    X_train, y_train, X_test, y_test = _split_data(df_train, df_test, nominal_features, target)
-    clf.fit(X_train, y_train)
-    y_pred = clf.predict(X_test)
-
-    return {
-        'accuracy': accuracy_score(y_test, y_pred),
-        'precision': precision_score(y_test, y_pred, average='macro'),
-        'recall': recall_score(y_test, y_pred, average='macro'),
-        'f1': f1_score(y_test, y_pred, average='macro')
-    }
-
-
-def generate_synthetic_data(synthesizer, df, num_rows=None, fit=False):
-    """
-    Generate synthetic data using the specified synthesizer.
-
-    Args:
-        synthesizer (object): Synthesizer object.
-        df (DataFrame): Original dataset.
-        num_rows (int, optional): Number of rows to generate. Defaults to None.
-        fit (bool, optional): Whether to fit the synthesizer. Defaults to False.
-
-    Returns:
-        DataFrame: Synthetic dataset.
-    """
-    def fit_synthesizer(synthesizer, df):
-        os.makedirs('./data/SDV', exist_ok=True)
-
-        synthesizer.fit(df)
-        synthesizer.save(filepath=f'./data/SDV/{type(synthesizer).__name__}.pkl')
-
-    try:
-        if fit:
-            fit_synthesizer(synthesizer, df)
-        else:
-            synthesizer = synthesizer.load(filepath=f'./data/SDV/{type(synthesizer).__name__}.pkl')
-    except:
-        fit_synthesizer(synthesizer, df)
-
-    if num_rows is None:
-        num_rows = len(df)
-    return synthesizer.sample(num_rows=num_rows)
-
-
-def _evaluate(evaluator, mode):
-    """
-    Evaluate the privacy risk using the specified evaluator and mode.
-
-    Args:
-        evaluator (object): Evaluator object.
-        mode (str): Evaluation mode.
-
-    Returns:
-        float: Privacy risk value.
-    """
-    try:
-        evaluator.evaluate(mode=mode)
-        return evaluator.risk()
-    except RuntimeError as ex:
-        print(f"Singling out evaluation failed with {ex}. Please re-run this cell."
-              "For more stable results increase `n_attacks`. Note that this will "
-              "make the evaluation slower.")
-        return None
-
-
-def evaluate_privacy_risks(df_orig, df_synth, df_control, n_attacks=1000, n_cols=None):
-    """
-    Evaluate privacy risks using singling out evaluation.
-
-    Args:
-        df_orig (DataFrame): Original dataset.
-        df_synth (DataFrame): Synthetic dataset.
-        df_control (DataFrame): Control dataset.
-        n_attacks (int, optional): Number of attacks. Defaults to 1000.
-        n_cols (int, optional): Number of columns. Defaults to None.
-
-    Returns:
-        dict: Dictionary containing univariate and multivariate privacy risks.
-    """
-    if n_cols is None:
-        n_cols = len(df_orig.columns)
-
-    return {
-        'univariate': _evaluate(SinglingOutEvaluator(ori=df_orig, syn=df_synth, control=df_control, n_attacks=n_attacks), 'univariate'),
-        'multivariate': _evaluate(SinglingOutEvaluator(ori=df_orig, syn=df_synth, control=df_control, n_attacks=n_attacks, n_cols=len(df_orig.columns)), 'multivariate')
-    }
-
-
-def evaluate_fidelity(df_orig, df_synth):
-    """
-    Evaluate fidelity of synthetic data, using CSTest, ContinuousKLDivergence, DiscreteKLDivergence, SVCDetection, LogisticDetection
-
-    Args:
-        df_orig (DataFrame): Original dataset.
-        df_synth (DataFrame): Synthetic dataset.
-
-    Returns:
-        dict: Dictionary containing fidelity scores computed by various metrics.
-    """
-    return {
-        'CSTest': CSTest.compute(df_orig, df_synth),
-        'ContinuousKLDivergence': ContinuousKLDivergence.compute(df_orig, df_synth),
-        'DiscreteKLDivergence': DiscreteKLDivergence.compute(df_orig, df_synth),
-        # 'SVCDetection': SVCDetection.compute(df_orig, df_synth),
-        'LogisticDetection': LogisticDetection.compute(df_orig, df_synth)
-    }
-
-
-def evaluate_inference_risks(df_orig, df_synth, df_control, n_attacks=1000):
-    """
-    Evaluate inference risks of synthetic data.
-
-    Args:
-        df_orig (DataFrame): Original dataset.
-        df_synth (DataFrame): Synthetic dataset.
-        df_control (DataFrame): Control dataset.
-        n_attacks (int, optional): Number of attacks. Defaults to 1000.
-    """
-    columns = df_orig.columns
-    results = []
-
-    for secret in columns:
-        aux_cols = [col for col in columns if col != secret]
-        evaluator = InferenceEvaluator(ori=df_orig, syn=df_synth, control=df_control, aux_cols=aux_cols, secret=secret, n_attacks=n_attacks)
-        evaluator.evaluate(n_jobs=-2)
-        results.append((secret, evaluator.results()))
-
-    print({res[0]: res[1].risk() for res in results})
-    visulize_inference_risks(results)
-
-
-def visulize_inference_risks(results):
-    """
-    Visualize inference risks.
-
-    Args:
-        results (list): List of tuples containing column names and evaluation results.
-    """
-    _, ax = plt.subplots()
-    risks = [res[1].risk().value for res in results]
-    columns = [res[0] for res in results]
-
-    ax.bar(x=columns, height=risks, alpha=0.5, ecolor='black', capsize=10)
-
-    plt.xticks(rotation=45, ha='right')
-    ax.set_ylabel("Measured inference risk")
-    _ = ax.set_xlabel("Secret column")
+    plt.show()
