@@ -1,5 +1,4 @@
 {
-    "METADATA_SPEC_VERSION": "SINGLE_TABLE_V1",
     "columns": {
         "age": {
             "sdtype": "numerical"
@@ -37,11 +36,9 @@
         "hours-per-week": {
             "sdtype": "numerical"
         },
-        "native-country": {
-            "sdtype": "categorical"
-        },
         "income": {
             "sdtype": "categorical"
         }
-    }
+    },
+    "METADATA_SPEC_VERSION": "SINGLE_TABLE_V1"
 }
