@@ -7,7 +7,7 @@ readme = "README.md"
 packages = [{include = "src"}]
 
 [tool.poetry.dependencies]
-python = ">=3.9,<3.12"
+python = ">=3.10,<3.12"
 aif360 = "^0.6.1"
 numpy = "^1.26.4"
 pandas = "^2.2.2"
@@ -24,6 +24,15 @@ ranger = "^0.10"
 rpy2 = "^3.5.16"
 fairlearn = "^0.10.0"
 infairness = "^0.2.3"
+tensorflow = "^2.16.1"
+torch = "^2.3.0"
+skorch = "^0.15.0"
+fairlens = "^0.1.0"
+scipy = "1.11.4"
+mlxtend = "^0.23.1"
+colorama = "^0.4.6"
+dython = "^0.7.6"
+igraph = "^0.11.6"
 
 
 [tool.poetry.group.dev.dependencies]

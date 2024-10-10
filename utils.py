@@ -65,8 +65,8 @@ def describe_model(y_test, y_pred, verbose=False):
     if verbose:
         print(f"Metric{' ':8} Value{' ':15}")
         for k, v in metrics.items():
-            print(f"{k:15}{v:15}")
-
+            print(f"{k:15}{v:.3f}")
+            
     return metrics
 
 

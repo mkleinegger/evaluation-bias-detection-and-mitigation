@@ -147,7 +147,7 @@ def describe_fairness(observations, expectations, protected_attributes, verbose=
     if verbose:
         print(f"Metric{' ':25} Value{' ':15}")
         for k, v in fairness_metrics.items():
-            print(f"{k:32}{v:15}")
+            print(f"{k:32}{v:.3f}")
 
     return fairness_metrics
 
